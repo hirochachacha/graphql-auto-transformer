@@ -20,7 +20,8 @@
     "test": "jest",
     "build": "tsc",
     "lint": "eslint 'src/**/*.ts'",
-    "format": "eslint 'src/**/*.ts' --fix"
+    "format": "eslint 'src/**/*.ts' --fix",
+    "clean": "rm -rf lib"
   },
   "dependencies": {
     "graphql": "^14.5.8",

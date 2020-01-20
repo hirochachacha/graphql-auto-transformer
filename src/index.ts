@@ -1,1 +1,3 @@
-export * from './AutoTransformer'
+import {AutoTransformer} from './AutoTransformer'
+
+export default AutoTransformer
