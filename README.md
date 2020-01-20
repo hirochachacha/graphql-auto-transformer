@@ -1,7 +1,7 @@
 graphql-auto-transformer
 ========================
 
-An custom transformer of the amplify-cli. It will customize lifecycle of auto generated fields.
+A custom transformer of the amplify-cli. It can control accessibility of auto generated fields.
 
 ```
 directive @auto(creatable: Boolean = false, updatable: Boolean = false) on FIELD_DEFINITION
