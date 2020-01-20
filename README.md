@@ -92,7 +92,44 @@ type Post @model {
 }
 ```
 
+generates:
+
+```
+input CreatePostInput {
+  id: ID
+  text: String
+}
+
+input UpdatePostInput {
+  id: ID!
+  text: String
+}
+```
+
 If you want to allow optional creation/update like `id` field, use `creatable` and `updatable` parameter.
+
+```
+type Post @model {
+  id: ID!
+  text: String
+  createdAt: AWSDateTime! @auto(creatable: true)
+}
+```
+
+generates:
+
+```
+input CreatePostInput {
+  id: ID
+  text: String
+  createdAt: AWSDateTime
+}
+
+input UpdatePostInput {
+  id: ID!
+  text: String
+}
+```
 
 ## License
 
@@ -101,4 +138,5 @@ Fork of `graphql-versioned-transformer`
 Apache-2.0
 
    Copyright 2017 - 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
    Copyright 2020 - 2020 Hiroshi Ioka. All Rights Reserved.
