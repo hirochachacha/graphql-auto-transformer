@@ -1,13 +1,13 @@
 {
   "name": "graphql-auto-transformer",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "main": "./lib/index.js",
   "author": "Hiroshi Ioka",
   "license": "Apache-2.0",
   "description": "A GraphQL transform that control accessibility of auto generated fields",
   "homepage": "https://github.com/hirochachacha/graphql-auto-transformer#readme",
   "repository": {
-    "type" : "git",
+    "type": "git",
     "url": "https://github.com/hirochachacha/graphql-auto-transformer"
   },
   "keywords": [
