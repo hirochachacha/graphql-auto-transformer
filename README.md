@@ -74,11 +74,9 @@ Edit `amplify/backend/api/<YOUR_API>/transform.conf.json` and append `"./graphql
 
 ```
     "transformers": [
-      "./graphql-auto-transformer"
+      "graphql-auto-transformer"
     ]
 ```
-
-> Using local path will instruct the module loader to look for project local packages, not globally installed ones.
 
 ### 3. Use @auto directive
 
@@ -129,6 +127,14 @@ input UpdatePostInput {
   id: ID!
   text: String
 }
+```
+
+### 4. Export NODE_PATH
+
+This step isn't necessary once https://github.com/aws-amplify/amplify-cli/pull/3236 merged.
+
+```
+export NODE_PATH=./node_modules
 ```
 
 ## License
