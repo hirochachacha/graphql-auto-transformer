@@ -16,6 +16,9 @@
     "appsync",
     "aws"
   ],
+  "files": [
+    "lib"
+  ],
   "scripts": {
     "test": "jest",
     "build": "tsc",
