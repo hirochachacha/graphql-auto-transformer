@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
-    "target": "es5",
+    "target": "es2018",
     "module": "commonjs",
     "lib": [
-        "esnext"
+        "es2018"
     ],
     "declaration": true,
     "sourceMap": true,
@@ -12,7 +12,7 @@
     "strict": true
   },
   "exclude": [
-    "node_modules",
-    "lib"
+    "lib",
+    "src/__tests__/**/*"
   ]
 }
