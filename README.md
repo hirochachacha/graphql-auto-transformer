@@ -129,14 +129,6 @@ input UpdatePostInput {
 }
 ```
 
-### 4. Export NODE_PATH
-
-This step isn't necessary once https://github.com/aws-amplify/amplify-cli/pull/3236 merged.
-
-```
-export NODE_PATH=./node_modules
-```
-
 ## License
 
 Fork of `graphql-versioned-transformer`

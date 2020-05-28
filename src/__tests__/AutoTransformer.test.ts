@@ -2,6 +2,7 @@ import {ObjectTypeDefinitionNode, parse, DocumentNode, TypeNode, Kind, InputObje
 import {GraphQLTransform} from 'graphql-transformer-core'
 import {AutoTransformer} from '../AutoTransformer'
 import {DynamoDBModelTransformer} from 'graphql-dynamodb-transformer'
+import {KeyTransformer} from 'graphql-key-transformer'
 
 const getInputType = (schemaDoc: DocumentNode) => (name: string): InputObjectTypeDefinitionNode =>
   schemaDoc.definitions.find(
@@ -27,6 +28,24 @@ const typeToString = (t?: TypeNode): string => {
       return `${typeToString(t.type)}!`
   }
 }
+
+test('@auto define timestamps before using it', () => {
+  const validSchema = `
+    type Post @model(timestamps: {createdAt: "onCreate"})
+    @key(fields: ["title", "onCreate"])
+    {
+        title: String!
+        onCreate: String! @auto
+    }
+    `
+  const transformer = new GraphQLTransform({
+    transformers: [new DynamoDBModelTransformer(), new KeyTransformer(), new AutoTransformer()],
+  })
+  const out = transformer.transform(validSchema)
+
+  const createPost = out.resolvers['Mutation.createPost.req.vtl']
+  expect(createPost.indexOf('$context.args.input.put("onCreate"') < createPost.indexOf('$ctx.args.input.onCreate'))
+})
 
 test('@auto strip target field of CreateXXXInput and UpdateXXXInput', () => {
   const validSchema = `

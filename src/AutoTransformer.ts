@@ -14,7 +14,14 @@ import {
   TransformerContractError,
   gql,
 } from 'graphql-transformer-core'
-import {ModelResourceIDs, isNonNullType, makeInputValueDefinition, unwrapNonNull} from 'graphql-transformer-common'
+import {
+  ResolverResourceIDs,
+  ModelResourceIDs,
+  isNonNullType,
+  makeInputValueDefinition,
+  unwrapNonNull,
+} from 'graphql-transformer-common'
+import {printBlock, compoundExpression, qref} from 'graphql-mapping-template'
 
 export class AutoTransformer extends Transformer {
   constructor() {
@@ -48,16 +55,117 @@ export class AutoTransformer extends Transformer {
     }
 
     const isArg = (s: string) => (arg: ArgumentNode) => arg.name.value === s
-    const getArg = (arg: string, dflt?: any): any => {
+    const getArg = (directive: DirectiveNode, arg: string, dflt?: any): any => {
       const argument = directive.arguments?.find(isArg(arg))
       return argument ? valueFromASTUntyped(argument.value) : dflt
     }
 
-    const creatable = getArg('creatable', false)
-    const updatable = getArg('updatable', false)
+    const typeName = parent.name.value
 
-    this.updateCreateInput(ctx, parent.name.value, definition, creatable)
-    this.updateUpdateInput(ctx, parent.name.value, definition, updatable)
+    const creatable = getArg(directive, 'creatable', false)
+    const updatable = getArg(directive, 'updatable', false)
+
+    this.updateCreateInput(ctx, typeName, definition, creatable)
+    this.updateUpdateInput(ctx, typeName, definition, updatable)
+
+    // @key directive generates VTL code before @model does.
+    // There're three cases @key trie to use automatic variables before they're defined.
+    // 1. An automatic generated variable is a part of composite primary key:
+    //   @key(fields: ["hash", "createdAt"]
+    // 2. An automatic generated variable is a part of range key:
+    //   @key(name: "byThing", fields: ["hash", "sender", "createdAt"]
+    // 3. An automatic generated variable satisfy 1 and 2.
+    // To handle this problem, We generate automatic variables by ourselves.
+
+    const keyDirectives = parent.directives?.filter((dir) => dir.name.value === 'key')
+    if (keyDirectives) {
+      let useCreatedAtField = false
+      let useUpdatedAtField = false
+      let useTypeName = false
+
+      let createdAtField: string | null = null
+      let updatedAtField: string | null = null
+      const timestamps = getArg(modelDirective, 'timestamps')
+      switch (typeof timestamps) {
+        case 'object':
+          if (timestamps !== null) {
+            createdAtField = timestamps['createdAt']
+            updatedAtField = timestamps['updatedAt']
+            if (createdAtField === undefined) {
+              createdAtField = 'createdAt'
+            }
+            if (updatedAtField === undefined) {
+              updatedAtField = 'updatedAt'
+            }
+          }
+          break
+        case 'undefined':
+          createdAtField = 'createdAt'
+          updatedAtField = 'updatedAt'
+          break
+        default:
+          throw new Error('unreachable')
+      }
+
+      for (const kd of keyDirectives) {
+        const fields = getArg(kd, 'fields')
+        if (fields) {
+          if (fields.includes(createdAtField)) {
+            useCreatedAtField = true
+          }
+          if (fields.includes(updatedAtField)) {
+            useUpdatedAtField = true
+          }
+          if (fields.includes('__typename')) {
+            useTypeName = true
+          }
+        }
+      }
+
+      // Update create and update mutations
+      const createResolverResourceId = ResolverResourceIDs.DynamoDBCreateResolverResourceID(typeName)
+      this.updateResolver(
+        ctx,
+        createResolverResourceId,
+        printBlock(`Prepare DynamoDB PutItem Request for @auto`)(
+          compoundExpression([
+            ...(useCreatedAtField && createdAtField
+              ? [
+                  qref(
+                    `$context.args.input.put("${createdAtField}", $util.defaultIfNull($ctx.args.input.${createdAtField}, util.time.nowISO8601()))`
+                  ),
+                ]
+              : []),
+            ...(useUpdatedAtField && updatedAtField
+              ? [
+                  qref(
+                    `$context.args.input.put("${updatedAtField}", $util.defaultIfNull($ctx.args.input.${updatedAtField}, util.time.nowISO8601()))`
+                  ),
+                ]
+              : []),
+            ...(useTypeName ? [qref(`$context.args.input.put("__typename", "${typeName}")`)] : []),
+          ])
+        )
+      )
+
+      const updateResolverResourceId = ResolverResourceIDs.DynamoDBUpdateResolverResourceID(typeName)
+      this.updateResolver(
+        ctx,
+        updateResolverResourceId,
+        printBlock(`Prepare DynamoDB UpdateItem Request for @auto`)(
+          compoundExpression([
+            ...(useUpdatedAtField && updatedAtField
+              ? [
+                  qref(
+                    `$context.args.input.put("${updatedAtField}", $util.defaultIfNull($ctx.args.input.${updatedAtField}, util.time.nowISO8601()))`
+                  ),
+                ]
+              : []),
+            ...(useTypeName ? [qref(`$context.args.input.put("__typename", "${typeName}")`)] : []),
+          ])
+        )
+      )
+    }
   }
 
   private updateCreateInput(
@@ -115,6 +223,16 @@ export class AutoTransformer extends Transformer {
           })
         }
       }
+    }
+  }
+
+  private updateResolver = (ctx: TransformerContext, resolverResourceId: string, code: string) => {
+    const resolver = ctx.getResource(resolverResourceId)
+
+    if (resolver) {
+      const templateParts = [code, resolver!.Properties!.RequestMappingTemplate]
+      resolver!.Properties!.RequestMappingTemplate = templateParts.join('\n\n')
+      ctx.setResource(resolverResourceId, resolver)
     }
   }
 }
