@@ -132,14 +132,14 @@ export class AutoTransformer extends Transformer {
             ...(useCreatedAtField && createdAtField
               ? [
                   qref(
-                    `$context.args.input.put("${createdAtField}", $util.defaultIfNull($ctx.args.input.${createdAtField}, util.time.nowISO8601()))`
+                    `$context.args.input.put("${createdAtField}", $util.defaultIfNull($ctx.args.input.${createdAtField}, $util.time.nowISO8601()))`
                   ),
                 ]
               : []),
             ...(useUpdatedAtField && updatedAtField
               ? [
                   qref(
-                    `$context.args.input.put("${updatedAtField}", $util.defaultIfNull($ctx.args.input.${updatedAtField}, util.time.nowISO8601()))`
+                    `$context.args.input.put("${updatedAtField}", $util.defaultIfNull($ctx.args.input.${updatedAtField}, $util.time.nowISO8601()))`
                   ),
                 ]
               : []),
@@ -157,7 +157,7 @@ export class AutoTransformer extends Transformer {
             ...(useUpdatedAtField && updatedAtField
               ? [
                   qref(
-                    `$context.args.input.put("${updatedAtField}", $util.defaultIfNull($ctx.args.input.${updatedAtField}, util.time.nowISO8601()))`
+                    `$context.args.input.put("${updatedAtField}", $util.defaultIfNull($ctx.args.input.${updatedAtField}, $util.time.nowISO8601()))`
                   ),
                 ]
               : []),
