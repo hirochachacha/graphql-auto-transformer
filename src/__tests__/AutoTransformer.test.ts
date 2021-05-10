@@ -3,17 +3,22 @@ import {GraphQLTransform} from 'graphql-transformer-core'
 import {AutoTransformer} from '../AutoTransformer'
 import {DynamoDBModelTransformer} from 'graphql-dynamodb-transformer'
 import {KeyTransformer} from 'graphql-key-transformer'
+import {ModelAuthTransformer} from 'graphql-auth-transformer'
 
-const getInputType = (schemaDoc: DocumentNode) => (name: string): InputObjectTypeDefinitionNode =>
-  schemaDoc.definitions.find(
-    (d) => d.kind === Kind.INPUT_OBJECT_TYPE_DEFINITION && d.name.value === name
-  ) as InputObjectTypeDefinitionNode
+const getInputType =
+  (schemaDoc: DocumentNode) =>
+  (name: string): InputObjectTypeDefinitionNode =>
+    schemaDoc.definitions.find(
+      (d) => d.kind === Kind.INPUT_OBJECT_TYPE_DEFINITION && d.name.value === name
+    ) as InputObjectTypeDefinitionNode
 const getInputField = (input: InputObjectTypeDefinitionNode, field: string) =>
   input.fields?.find((f) => f.name.value === field)
-const getType = (schemaDoc: DocumentNode) => (name: string): ObjectTypeDefinitionNode =>
-  schemaDoc.definitions.find(
-    (d) => d.kind === Kind.OBJECT_TYPE_DEFINITION && d.name.value === name
-  ) as ObjectTypeDefinitionNode
+const getType =
+  (schemaDoc: DocumentNode) =>
+  (name: string): ObjectTypeDefinitionNode =>
+    schemaDoc.definitions.find(
+      (d) => d.kind === Kind.OBJECT_TYPE_DEFINITION && d.name.value === name
+    ) as ObjectTypeDefinitionNode
 const getField = (input: ObjectTypeDefinitionNode, field: string) => input.fields?.find((f) => f.name.value === field)
 const typeToString = (t?: TypeNode): string => {
   if (!t) {
@@ -31,11 +36,11 @@ const typeToString = (t?: TypeNode): string => {
 
 test('@auto define timestamps before using it', () => {
   const validSchema = `
-    type Post @model(timestamps: {createdAt: "onCreate"})
-    @key(fields: ["title", "onCreate"])
+    type Post @model(timestamps: {updatedAt: "updatedDate"})
+    @key(fields: ["title", "updatedDate"])
     {
         title: String!
-        onCreate: String! @auto
+        updatedDate: String! @auto
     }
     `
   const transformer = new GraphQLTransform({
@@ -43,8 +48,51 @@ test('@auto define timestamps before using it', () => {
   })
   const out = transformer.transform(validSchema)
 
-  const createPost = out.resolvers['Mutation.createPost.req.vtl']
-  expect(createPost.indexOf('$context.args.input.put("onCreate"') < createPost.indexOf('$ctx.args.input.onCreate'))
+  const updatePostVTL = out.resolvers['Mutation.updatePost.req.vtl']
+  expect(
+    updatePostVTL.indexOf('$context.args.input.put("updatedDate"') <
+      updatePostVTL.indexOf('$ctx.args.input.updatedDate')
+  )
+})
+
+test('@auto define owner before using it', () => {
+  const validSchema = `
+    type Post @model
+    @key(fields: ["owner", "updatedAt"])
+    @auth(rules: [
+      # Defaults to use the "owner" field.
+      { allow: owner },
+      # Authorize the update mutation and both queries.
+      { allow: owner, ownerField: "editors", operations: [update, read] }
+    ])
+    {
+        title: String!
+        editors: [String]
+        owner: ID! @auto
+        updatedAt: String! @auto
+    }
+    `
+  const transformer = new GraphQLTransform({
+    transformers: [
+      new DynamoDBModelTransformer(),
+      new KeyTransformer(),
+      new AutoTransformer(),
+      new ModelAuthTransformer({
+        authConfig: {
+          defaultAuthentication: {
+            authenticationType: 'AMAZON_COGNITO_USER_POOLS',
+          },
+          additionalAuthenticationProviders: [],
+        },
+      }),
+    ],
+  })
+  const out = transformer.transform(validSchema)
+
+  const createPostVTL = out.resolvers['Mutation.createPost.req.vtl']
+  const updatePostVTL = out.resolvers['Mutation.updatePost.req.vtl']
+  expect(createPostVTL.indexOf('$context.args.input.put("owner"') < createPostVTL.indexOf('$ctx.args.input.owner'))
+  expect(updatePostVTL.indexOf('$context.args.input.put("owner"') < updatePostVTL.indexOf('$ctx.args.input.owner'))
 })
 
 test('@auto strip target field of CreateXXXInput and UpdateXXXInput', () => {
@@ -53,6 +101,7 @@ test('@auto strip target field of CreateXXXInput and UpdateXXXInput', () => {
         id: ID!
         title: String!
         createdAt: String! @auto
+        owner: ID! @auto
     }
     `
   const transformer = new GraphQLTransform({
