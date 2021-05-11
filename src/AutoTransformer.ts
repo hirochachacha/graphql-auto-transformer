@@ -1,12 +1,4 @@
-import {
-  valueFromASTUntyped,
-  ObjectTypeDefinitionNode,
-  DirectiveNode,
-  ArgumentNode,
-  InterfaceTypeDefinitionNode,
-  FieldDefinitionNode,
-  Kind,
-} from 'graphql'
+import {ObjectTypeDefinitionNode, DirectiveNode, InterfaceTypeDefinitionNode, FieldDefinitionNode, Kind} from 'graphql'
 import {
   Transformer,
   TransformerContext,
@@ -22,8 +14,14 @@ import {
   unwrapNonNull,
 } from 'graphql-transformer-common'
 import {printBlock, compoundExpression, qref} from 'graphql-mapping-template'
+import {findDirective, getArgValueFromDirective, isEmpty, removeUndefinedValue} from './utils'
+import {Expression} from 'graphql-mapping-template/lib/ast'
 
 export class AutoTransformer extends Transformer {
+  private templateParts: {
+    [parentTypeName: string]: {updatedAt?: Expression; owner?: Expression; __typename?: Expression}
+  } = {}
+
   constructor() {
     super(
       'AutoTransformer',
@@ -35,41 +33,35 @@ export class AutoTransformer extends Transformer {
 
   public field = (
     parent: ObjectTypeDefinitionNode | InterfaceTypeDefinitionNode,
-    definition: FieldDefinitionNode,
+    fieldDefinition: FieldDefinitionNode,
     directive: DirectiveNode,
     ctx: TransformerContext
-  ) => {
+  ): void => {
     if (parent.kind === Kind.INTERFACE_TYPE_DEFINITION) {
       throw new InvalidDirectiveError(
-        `The @auto directive cannot be placed on an interface's field. See ${parent.name.value}${definition.name.value}`
+        `The @auto directive cannot be placed on an interface's field. See ${parent.name.value}${fieldDefinition.name.value}`
       )
     }
 
-    const modelDirective = parent.directives?.find((dir) => dir.name.value === 'model')
+    const modelDirective = findDirective(parent, 'model')
     if (!modelDirective) {
       throw new InvalidDirectiveError('Types annotated with @auto must also be annotated with @model.')
     }
 
-    if (!isNonNullType(definition.type)) {
+    if (!isNonNullType(fieldDefinition.type)) {
       throw new TransformerContractError(`@auto directive can only be used on non-nullable type fields`)
     }
 
-    const isArg = (s: string) => (arg: ArgumentNode) => arg.name.value === s
-    const getArg = (directive: DirectiveNode, arg: string, dflt?: any): any => {
-      const argument = directive.arguments?.find(isArg(arg))
-      return argument ? valueFromASTUntyped(argument.value) : dflt
-    }
+    const objectTypeName = parent.name.value
 
-    const typeName = parent.name.value
+    const creatable = getArgValueFromDirective(directive, 'creatable', false)
+    const updatable = getArgValueFromDirective(directive, 'updatable', false)
 
-    const creatable = getArg(directive, 'creatable', false)
-    const updatable = getArg(directive, 'updatable', false)
-
-    this.updateCreateInput(ctx, typeName, definition, creatable)
-    this.updateUpdateInput(ctx, typeName, definition, updatable)
+    this.updateCreateInput(ctx, objectTypeName, fieldDefinition, creatable)
+    this.updateUpdateInput(ctx, objectTypeName, fieldDefinition, updatable)
 
     // @key directive generates VTL code before @model does.
-    // There're three cases @key trie to use automatic variables before they're defined.
+    // There are three cases @key trie to use automatic variables before they're defined.
     // 1. An automatic generated variable is a part of composite primary key:
     //   @key(fields: ["hash", "createdAt"]
     // 2. An automatic generated variable is a part of range key:
@@ -77,94 +69,117 @@ export class AutoTransformer extends Transformer {
     // 3. An automatic generated variable satisfy 1 and 2.
     // To handle this problem, We generate automatic variables by ourselves.
 
-    const keyDirectives = parent.directives?.filter((dir) => dir.name.value === 'key')
-    if (keyDirectives) {
-      let useCreatedAtField = false
-      let useUpdatedAtField = false
-      let useTypeName = false
+    const keyDirectives = parent.directives?.filter((directive) => directive.name.value === 'key')
 
-      let createdAtField: string | null = null
-      let updatedAtField: string | null = null
-      const timestamps = getArg(modelDirective, 'timestamps')
-      switch (typeof timestamps) {
-        case 'object':
-          if (timestamps !== null) {
-            createdAtField = timestamps['createdAt']
-            updatedAtField = timestamps['updatedAt']
-            if (createdAtField === undefined) {
-              createdAtField = 'createdAt'
-            }
-            if (updatedAtField === undefined) {
-              updatedAtField = 'updatedAt'
-            }
-          }
-          break
-        case 'undefined':
-          createdAtField = 'createdAt'
-          updatedAtField = 'updatedAt'
-          break
-        default:
-          throw new Error('unreachable')
+    if (!keyDirectives) {
+      return
+    }
+
+    let useUpdatedAtField = false
+    let useTypeName = false
+    let useOwner = false
+    let ownerField = 'owner'
+
+    let ownerFields: string[] = []
+    const authDirective = findDirective(parent, 'auth')
+    if (authDirective) {
+      const rules = getArgValueFromDirective(authDirective, 'rules') as {ownerField?: string}[]
+      ownerFields = rules.map((rule) => rule.ownerField || 'owner') as string[]
+    }
+
+    const defaultTimestampConfig = {
+      updatedAt: 'updatedAt',
+    }
+    const timestampConfig = {
+      ...defaultTimestampConfig,
+      ...removeUndefinedValue(getArgValueFromDirective(modelDirective, 'timestamps', {})),
+    } as typeof defaultTimestampConfig
+    const currentFieldName = fieldDefinition.name.value
+
+    for (const keyDirective of keyDirectives) {
+      const keyFields = getArgValueFromDirective(keyDirective, 'fields') as string[] | undefined
+      const isPrimaryIndex = !getArgValueFromDirective(keyDirective, 'name')
+
+      if (!keyFields || !isPrimaryIndex || !keyFields.includes(currentFieldName)) {
+        continue
       }
 
-      for (const kd of keyDirectives) {
-        const fields = getArg(kd, 'fields')
-        if (fields) {
-          if (fields.includes(createdAtField)) {
-            useCreatedAtField = true
-          }
-          if (fields.includes(updatedAtField)) {
-            useUpdatedAtField = true
-          }
-          if (fields.includes('__typename')) {
-            useTypeName = true
-          }
-        }
+      if (currentFieldName === timestampConfig.updatedAt) {
+        useUpdatedAtField = true
+        continue
       }
 
-      // Update create and update mutations
-      const createResolverResourceId = ResolverResourceIDs.DynamoDBCreateResolverResourceID(typeName)
-      this.updateResolver(
-        ctx,
-        createResolverResourceId,
-        printBlock(`Prepare DynamoDB PutItem Request for @auto`)(
-          compoundExpression([
-            ...(useCreatedAtField && createdAtField
-              ? [
-                  qref(
-                    `$context.args.input.put("${createdAtField}", $util.defaultIfNull($ctx.args.input.${createdAtField}, $util.time.nowISO8601()))`
-                  ),
-                ]
-              : []),
-            ...(useUpdatedAtField && updatedAtField
-              ? [
-                  qref(
-                    `$context.args.input.put("${updatedAtField}", $util.defaultIfNull($ctx.args.input.${updatedAtField}, $util.time.nowISO8601()))`
-                  ),
-                ]
-              : []),
-            ...(useTypeName ? [qref(`$context.args.input.put("__typename", "${typeName}")`)] : []),
-          ])
-        )
-      )
+      const ownerFieldFound = keyFields.find((field) => ownerFields.includes(field))
+      if (currentFieldName === ownerFieldFound) {
+        ownerField = ownerFieldFound
+        useOwner = true
+        continue
+      }
 
-      const updateResolverResourceId = ResolverResourceIDs.DynamoDBUpdateResolverResourceID(typeName)
-      this.updateResolver(
-        ctx,
-        updateResolverResourceId,
-        printBlock(`Prepare DynamoDB UpdateItem Request for @auto`)(
-          compoundExpression([
-            ...(useUpdatedAtField && updatedAtField
-              ? [
-                  qref(
-                    `$context.args.input.put("${updatedAtField}", $util.defaultIfNull($ctx.args.input.${updatedAtField}, $util.time.nowISO8601()))`
-                  ),
-                ]
-              : []),
-            ...(useTypeName ? [qref(`$context.args.input.put("__typename", "${typeName}")`)] : []),
-          ])
-        )
+      if (currentFieldName === '__typename') {
+        useTypeName = true
+      }
+    }
+
+    if (!useUpdatedAtField && !useTypeName && !useOwner) {
+      return
+    }
+
+    if (!this.templateParts[objectTypeName]) {
+      this.templateParts[objectTypeName] = {}
+    }
+
+    if (useUpdatedAtField) {
+      this.templateParts[objectTypeName].updatedAt = qref(
+        `$context.args.input.put("${timestampConfig.updatedAt}", $util.defaultIfNull($ctx.args.input.${timestampConfig.updatedAt}, $util.time.nowISO8601()))`
       )
+      return
+    }
+
+    if (useTypeName) {
+      this.templateParts[objectTypeName].__typename = qref(`$context.args.input.put("__typename", "${objectTypeName}")`)
+    }
+
+    if (useOwner) {
+      const identityValue = `$util.defaultIfNull($ctx.identity.claims.get("username"), $util.defaultIfNull($ctx.identity.claims.get("cognito:username"), "___xamznone____"))`
+      this.templateParts[objectTypeName].owner = qref(
+        `$context.args.input.put("${ownerField}", $util.defaultIfNull($ctx.args.input.get("${ownerField}"), ${identityValue}))`
+      )
+    }
+  }
+
+  after = (ctx: TransformerContext): void => {
+    const templatePartsForObjectTypes = this.templateParts
+
+    if (isEmpty(templatePartsForObjectTypes)) {
+      return
+    }
+
+    for (const objectTypeName in templatePartsForObjectTypes) {
+      const templateParts = templatePartsForObjectTypes[objectTypeName]
+
+      const templateForCreateResolver = [templateParts.owner, templateParts.__typename].filter(Boolean) as Expression[]
+      const templateForUpdateResolver = [templateParts.owner, templateParts.updatedAt, templateParts.__typename].filter(
+        Boolean
+      ) as Expression[]
+
+      if (templateForCreateResolver.length) {
+        const createResolverResourceId = ResolverResourceIDs.DynamoDBCreateResolverResourceID(objectTypeName)
+        this.updateResolver(
+          ctx,
+          createResolverResourceId,
+          printBlock(`[@auto] Prepare DynamoDB PutItem Request`)(compoundExpression(templateForCreateResolver))
+        )
+      }
+
+      if (templateForUpdateResolver.length) {
+        const updateResolverResourceId = ResolverResourceIDs.DynamoDBUpdateResolverResourceID(objectTypeName)
+        this.updateResolver(
+          ctx,
+          updateResolverResourceId,
+          printBlock(`[@auto] Prepare DynamoDB UpdateItem Request`)(compoundExpression(templateForUpdateResolver))
+        )
+      }
     }
   }
 
@@ -194,36 +209,30 @@ export class AutoTransformer extends Transformer {
     nullable: boolean
   ) {
     const input = ctx.getType(inputName)
-    if (input && input.kind === Kind.INPUT_OBJECT_TYPE_DEFINITION) {
-      if (input.fields) {
-        if (nullable) {
-          // make autoField nullable
-          ctx.putType({
-            ...input,
-            fields: input.fields.map((f) => {
-              if (f.name.value === autoField.name.value) {
-                return makeInputValueDefinition(autoField.name.value, unwrapNonNull(autoField.type))
-              }
-              return f
-            }),
-          })
-        } else {
-          // or strip autoField
-          const updatedFields = input.fields.filter((f) => f.name.value !== autoField.name.value)
-          if (updatedFields.length === 0) {
-            throw new InvalidDirectiveError(
-              `After stripping away version field "${autoField.name.value}", \
-                        the create input for type "${typeName}" cannot be created \
-                        with 0 fields. Add another field to type "${typeName}" to continue.`
-            )
-          }
-          ctx.putType({
-            ...input,
-            fields: updatedFields,
-          })
-        }
-      }
+
+    if (!(input && input.kind === Kind.INPUT_OBJECT_TYPE_DEFINITION && input.fields)) {
+      return
     }
+
+    const fieldsWithoutAutoField = input.fields.filter((field) => field.name.value !== autoField.name.value)
+    const fieldsWithNullableAutoField = input.fields.map((field) => {
+      if (field.name.value === autoField.name.value) {
+        return makeInputValueDefinition(autoField.name.value, unwrapNonNull(autoField.type))
+      }
+      return field
+    })
+    const updatedFields = nullable ? fieldsWithNullableAutoField : fieldsWithoutAutoField
+
+    if (updatedFields.length === 0 && !nullable) {
+      throw new InvalidDirectiveError(
+        `After stripping away version field "${autoField.name.value}", the create input for type "${typeName}" cannot be created with 0 fields. Add another field to type "${typeName}" to continue.`
+      )
+    }
+
+    ctx.putType({
+      ...input,
+      fields: updatedFields,
+    })
   }
 
   private updateResolver = (ctx: TransformerContext, resolverResourceId: string, code: string) => {

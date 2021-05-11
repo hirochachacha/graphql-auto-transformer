@@ -1,10 +1,11 @@
 {
   "compilerOptions": {
-    "target": "es2018",
-    "module": "commonjs",
+    "target": "ES2018",
+    "module": "ESNext",
     "lib": [
-        "es2018"
+        "ESNext"
     ],
+    "moduleResolution": "node",
     "declaration": true,
     "sourceMap": true,
     "outDir": "./lib",
